@@ -1,10 +1,10 @@
 {
-    "taskDefinition": "my-webapp",
-    "cluster": "my-webapp-cluster",
+    "taskDefinition": "my-apache",
+    "cluster": "apache-service-cluster",
     "loadBalancers": [
         {
-            "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:543028534356:targetgroup/MyApp-ALB-target1/d0acca137b3de118",
-            "containerName": "my-webapp",
+            "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:058264351046:targetgroup/BLUE/b22134aaaf960af1",
+            "containerName": "my-apache",
             "containerPort": 80
         }
     ],
@@ -17,13 +17,14 @@
     "networkConfiguration": {
         "awsvpcConfiguration": {
             "subnets": [
-                "subnet-0b98aa518d3dd8e04",
-                "subnet-01a400272ac198a96"
+                "subnet-088c6dfa66ca108fa",
+                "subnet-0db0721632cfd6115"
             ],
             "securityGroups": [
-				"sg-091e285eafdfb9e23"
+				"sg-0932f676120e18854"
             ],
             "assignPublicIp": "ENABLED"
         }
     }
+
 }
