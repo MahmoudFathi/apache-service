@@ -1,8 +1,8 @@
 { 
-   "executionRoleArn":"arn:aws:iam::543028534356:role/Task_Definition_Role",
+   "executionRoleArn":"arn:aws:iam::058264351046:role/ecsTaskExecutionRole",
    "containerDefinitions":[ 
       { 
-         "name":"my-webapp",
+         "name":"my-apache",
          "image":"<IMAGE1_NAME>",
          "essential":true,
          "portMappings":[ 
@@ -21,5 +21,6 @@
    "networkMode":"awsvpc",
    "cpu":"256",
    "memory":"512",
-   "family":"my-webapp"
+   "family":"my-apache"
 }
+
