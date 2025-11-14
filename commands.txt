@@ -1,0 +1,7 @@
+aws ecs create-service --service-name MyApp-Web-service --cli-input-json file://create-service.json
+
+
+aws ecs register-task-definition --cli-input-json file://taskdef.json
+
+
+<IMAGE1_NAME>

@@ -1,0 +1,29 @@
+{
+    "taskDefinition": "my-webapp",
+    "cluster": "my-webapp-cluster",
+    "loadBalancers": [
+        {
+            "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:543028534356:targetgroup/MyApp-ALB-target1/d0acca137b3de118",
+            "containerName": "my-webapp",
+            "containerPort": 80
+        }
+    ],
+    "desiredCount": 1,
+    "launchType": "FARGATE",
+    "schedulingStrategy": "REPLICA",
+    "deploymentController": {
+        "type": "CODE_DEPLOY"
+    },
+    "networkConfiguration": {
+        "awsvpcConfiguration": {
+            "subnets": [
+                "subnet-0b98aa518d3dd8e04",
+                "subnet-01a400272ac198a96"
+            ],
+            "securityGroups": [
+				"sg-091e285eafdfb9e23"
+            ],
+            "assignPublicIp": "ENABLED"
+        }
+    }
+}

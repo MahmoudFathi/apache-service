@@ -1,0 +1,25 @@
+{ 
+   "executionRoleArn":"arn:aws:iam::543028534356:role/Task_Definition_Role",
+   "containerDefinitions":[ 
+      { 
+         "name":"my-webapp",
+         "image":"<IMAGE1_NAME>",
+         "essential":true,
+         "portMappings":[ 
+            { 
+               "hostPort":80,
+               "protocol":"tcp",
+               "containerPort":80
+            }
+         ]
+      }
+   ],
+   "requiresCompatibilities":[ 
+      "EC2",
+      "FARGATE"
+   ],
+   "networkMode":"awsvpc",
+   "cpu":"256",
+   "memory":"512",
+   "family":"my-webapp"
+}
