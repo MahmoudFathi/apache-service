@@ -6,8 +6,8 @@ phases:
       - echo Logging in to Amazon ECR...
       - aws --version
     # - REPOSITORY_URI=543028534356.dkr.ecr.us-east-1.amazonaws.com/my-webapp-repo
-      - REPOSITORY_URI=543028534356.dkr.ecr.us-east-1.amazonaws.com/my-webapp-repo
-      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $REPOSITORY_URI
+      - REPOSITORY_URI=058264351046.dkr.ecr.us-east-1.amazonaws.com/apache-service
+      - aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $REPOSITORY_URI
       - IMAGE_TAG=build-$(echo $CODEBUILD_BUILD_ID | awk -F":" '{print $2}')
   build:
     commands:
@@ -26,4 +26,5 @@ phases:
 
 artifacts:
   files:
+
     - imageDetail.json
