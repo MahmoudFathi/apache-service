@@ -3,9 +3,10 @@
 "Parameters": {
   "VpcId": "vpc-0e4481f872cb2bbcd",
   "Subnet1": "subnet-088c6dfa66ca108fa",
-  "Subnet2: "subnet-0db0721632cfd6115",
+  "Subnet2": "subnet-0db0721632cfd6115",
   "EcsClusterName": "pleasant-hippopotamus-fahaga",
   "ECSServiceSG": "sg-0932f676120e18854",
+  "AppVersion": "1"
   "ImageBlue": ""
 }
 }
