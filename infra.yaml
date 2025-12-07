@@ -3,11 +3,11 @@ Description: Manual Blue/Green ECS (ALB, BlueTG, GreenTG, Blue & Green Services)
 
 Parameters:
   VpcId:
-    Type: AWS::EC2::VPC::Id
+    Type: String
   Subnet1:
-    Type: AWS::EC2::Subnet::Id
+    Type: String
   Subnet2:
-    Type: AWS::EC2::Subnet::Id
+    Type: String
  
 
   EcsClusterName:
@@ -161,4 +161,5 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
       Path: /
+
 
