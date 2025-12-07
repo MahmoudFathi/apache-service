@@ -7,6 +7,6 @@
   "EcsClusterName": "pleasant-hippopotamus-fahaga",
   "ECSServiceSG": "sg-0932f676120e18854",
   "AppVersion": "1"
-  "ImageBlue": ""
+  "ImageBlue": "2"
 }
 }
