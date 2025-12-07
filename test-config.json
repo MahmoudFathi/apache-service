@@ -6,7 +6,7 @@
   "Subnet2": "subnet-0db0721632cfd6115",
   "EcsClusterName": "pleasant-hippopotamus-fahaga",
   "ECSServiceSG": "sg-0932f676120e18854",
-  "AppVersion": "1"
+  "AppVersion": "1",
   "ImageBlue": "2"
 }
 }
