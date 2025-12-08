@@ -1,0 +1,149 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Create an Application Load Balancer (ALB) with HTTP listener and target group"
+
+Parameters:
+  VpcId:
+    Type: String
+    Description: VPC ID where the ALB will be created
+  
+  TargetGroupHealthCheckPath:
+    Type: String
+    Default: "/"
+    Description: Health check path for target group
+
+  TargetGroupPort:
+    Type: Number
+    Default: 80
+    Description: Target port for the target group
+
+  ApplicationLoadBalancerArn:
+    Type: String
+    Description: Load Balancer ARN that you want you service deployed to
+
+  ContainerImage:
+    Type: String
+
+  ContainerPort:
+    Type: Number
+    Default: 80
+
+  ECSCluster:
+    Type: String
+
+  ECSServiceSG:
+   Type: String
+
+  Subnet1:
+   Type: String
+
+  Subnet2:
+   Type: String
+
+Resources:
+  #########################################
+  # Green Target Group
+  #########################################
+  GreenTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VpcId
+      Name: GreenTG
+      Protocol: HTTP
+      Port: !Ref TargetGroupPort
+      TargetType: ip   # or ip or lambda
+      HealthCheckEnabled: true
+      HealthCheckPath: !Ref TargetGroupHealthCheckPath
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 2
+
+  #########################################
+  # Listener (HTTP: 80)
+  #########################################
+  BlueALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancerArn
+      Port: 8080
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref GreenTargetGroup
+   #################################################
+    #  ECS Task Role
+    ################################################
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+
+    #########################################
+    # ECS Execution Role
+   #########################################
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Path: /
+
+
+  GreenTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: spider-service-green
+      Cpu: "256"
+      Memory: "512"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: green-app
+          Image: !Ref ContainerImage
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+  
+     #########################################
+    # ECS Service connected to existing ALB
+    #########################################
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: GreenTaskDef
+    Properties:
+      Cluster: !Ref ECSCluster
+      ServiceName: spider-green-service
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref GreenTaskDef
+      DeploymentController:
+       Type: CODE_DEPLOY
+      LoadBalancers:
+        - ContainerName: green-app
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref GreenTargetGroup
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+           - !Ref ECSServiceSG
+          Subnets: 
+           - !Ref Subnet1
+           - !Ref Subnet2
