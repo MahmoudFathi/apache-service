@@ -41,11 +41,16 @@ Parameters:
     Type: String
     Default: blue
     AllowedValues: [blue, green]
-
+  ExistingALBArn:
+    Type: String
+    
+Conditions:
+  CreateALB: !Equals [!Ref ExistingALBArn, "" ]
 Resources:
 
   ALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Condition: CreateALB
     Properties:
       Name: New-ALB
       Scheme: internet-facing
@@ -70,7 +75,6 @@ Resources:
   TG:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     UpdateReplacePolicy: Retain
-    DeletionPolicy: Retain
     Properties:
       Name: !Ref AppVersion
       VpcId: !Ref VpcId
@@ -106,7 +110,6 @@ Resources:
   BlueService:
     Type: AWS::ECS::Service
     UpdateReplacePolicy: Retain
-    DeletionPolicy: Retain
     DependsOn:
      - ALB
     Properties:
@@ -161,5 +164,6 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
       Path: /
+
 
 
