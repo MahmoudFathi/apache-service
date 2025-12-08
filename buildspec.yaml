@@ -30,5 +30,8 @@ artifacts:
     - imageDetail.json
 
 
+env:
+  exported-variables:
+    - ImageURI
 
 
