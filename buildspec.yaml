@@ -23,16 +23,17 @@ phases:
       - docker push $REPOSITORY_URI:$IMAGE_TAG
       - echo Writing image definitions file...
       - printf '{"ImageURI":"%s"}' $REPOSITORY_URI:$IMAGE_TAG > imageDetail.json
+      - echo $ImageURI
 
 artifacts:
   files:
 
     - imageDetail.json
 
-export $ImageURI
 env:
   exported-variables:
     - ImageURI
+
 
 
 
