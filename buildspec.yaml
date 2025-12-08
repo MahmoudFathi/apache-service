@@ -29,9 +29,10 @@ artifacts:
 
     - imageDetail.json
 
-
+export $ImageURI
 env:
   exported-variables:
     - ImageURI
+
 
 
