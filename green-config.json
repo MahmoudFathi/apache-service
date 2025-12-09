@@ -6,6 +6,7 @@
     "ECSCluster": "ProdCluster",
     "ECSServiceSG": "sg-090096619c068f5c2",
     "ApplicationLoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:058264351046:loadbalancer/app/MyProdALB/d971e37faf825022",
+    "ExistingTargetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:058264351046:targetgroup/ProdTG/fd4c5a20e93de395",
     "ContainerImage": ""
   }
 }
