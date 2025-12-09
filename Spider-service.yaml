@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "ECS cluster with one service connected to an existing ALB"
+
+Parameters:
+  ECSCluster:
+   Type: String
+ 
+  ContainerImage:
+    Type: String
+
+  ContainerPort:
+    Type: Number
+    Default: 80
+   
+  ECSServiceSG:
+   Type: String
+  
+  ExistingTargetGroupArn:
+   Type: String
+
+  Subnet1:
+   Type: String
+  Subnet2:
+   Type: String
+
+Resources:
+
+  #########################################
+  # ECS Task Definition
+  #########################################
+ ECSTaskDefinition:
+  Type: AWS::ECS::TaskDefinition
+  Properties:
+      Family: "spider-taskdef"
+      Cpu: "256"
+      Memory: "512"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt ECSTaskRole.Arn
+      ContainerDefinitions:
+        - Name: app
+          Image: !Ref ContainerImage
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+              Protocol: tcp
+
+ #########################################
+  # ECS Task Role
+  #########################################
+ ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+
+  #########################################
+  # ECS Execution Role
+  #########################################
+ ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Path: /
+
+  #########################################
+  # ECS Service connected to existing ALB
+  #########################################
+ ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: ECSTaskDefinition
+    Properties:
+      Cluster: !Ref ECSCluster
+      ServiceName: spider-service
+      LaunchType: FARGATE
+      DesiredCount: 1
+      TaskDefinition: !Ref ECSTaskDefinition
+      DeploymentController:
+       Type: CODE_DEPLOY
+      LoadBalancers:
+        - ContainerName: app
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref ExistingTargetGroupArn
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+           - !Ref ECSServiceSG
+          Subnets: 
+           - !Ref Subnet1
+           - !Ref Subnet2
