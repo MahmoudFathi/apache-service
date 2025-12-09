@@ -133,8 +133,6 @@ Resources:
       LaunchType: FARGATE
       DesiredCount: 1
       TaskDefinition: !Ref GreenTaskDef
-      DeploymentController:
-       Type: CODE_DEPLOY
       LoadBalancers:
         - ContainerName: green-app
           ContainerPort: !Ref ContainerPort
@@ -146,4 +144,5 @@ Resources:
            - !Ref ECSServiceSG
           Subnets: 
            - !Ref Subnet1
+
            - !Ref Subnet2
