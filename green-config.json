@@ -4,8 +4,8 @@
     "Subnet1": "subnet-088c6dfa66ca108fa",
     "Subnet2": "subnet-0db0721632cfd6115",
     "ECSCluster": "ProdCluster",
-    "ECSServiceSG": "sg-00c0c37507746ef9e",
-    "ApplicationLoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:058264351046:loadbalancer/app/MyALB/f04bf10d3dbac7df",
+    "ECSServiceSG": "sg-090096619c068f5c2",
+    "ApplicationLoadBalancerArn": "arn:aws:elasticloadbalancing:us-east-1:058264351046:loadbalancer/app/MyProdALB/d971e37faf825022",
     "ContainerImage": ""
   }
 }
