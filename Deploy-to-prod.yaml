@@ -1,0 +1,42 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Deploy new version to prod"
+
+Parameters:
+  ContainerImage:
+    Type: String
+
+  ContainerPort:
+    Type: Number
+    Default: 80
+
+
+Resources:
+  #########################################
+  # ECS Task Definition
+  #########################################
+   ECSTaskDefinition:
+    ype: AWS::ECS::TaskDefinition
+    Properties:
+      Family: "spider-taskdef"
+      Cpu: "256"
+      Memory: "512"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: "arn:aws:iam::058264351046:role/Prod-App-Spider-ECSServiceStac-ECSTaskExecutionRole-igbiP2t5d6g2"
+      TaskRoleArn: "arn:aws:iam::058264351046:role/Prod-App-Spider-ECSServiceStack-XV08C21-ECSTaskRole-wiack1EKRQxi"
+      ContainerDefinitions:
+        - Name: app
+          Image: !Ref ContainerImage
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+              Protocol: tcp
+
+   UpdateECSService:
+    Type: AWS::ECS::Service
+    DependsOn: ECSTaskDefinition
+    Properties:
+      Cluster: ProdCluster
+      ServiceName: spider-service
+      TaskDefinition: !Ref ECSTaskDefinition
+      
