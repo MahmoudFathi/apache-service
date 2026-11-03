@@ -1,13 +1,17 @@
 version: 0.2
 
+env:
+  variables:
+    AWS_ACCOUNT_ID: "058264351046"
+    IMAGE_REPO_NAME: "apache-service"
+
 phases:
   pre_build:
     commands:
       - echo Logging in to Amazon ECR...
       - aws --version
-    # - REPOSITORY_URI=543028534356.dkr.ecr.us-east-1.amazonaws.com/my-webapp-repo
-      - REPOSITORY_URI=058264351046.dkr.ecr.us-east-1.amazonaws.com/apache-service
-      - aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 058264351046.dkr.ecr.us-east-1.amazonaws.com
+      - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
       - IMAGE_TAG=build-$(echo $CODEBUILD_BUILD_ID | awk -F":" '{print $2}')
   build:
     commands:
@@ -22,23 +26,10 @@ phases:
       - docker push $REPOSITORY_URI:latest
       - docker push $REPOSITORY_URI:$IMAGE_TAG
       - echo Writing image definitions file...
-      - printf '[{"name":"web","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imageDetail.json
-      - cat imageDetail.json
-      - ImageURI=$REPOSITORY_URI:$IMAGE_TAG
-      - echo $ImageURI
+      - printf '{"ImageURI":"%s"}' $REPOSITORY_URI:$IMAGE_TAG > imageDetail.json
 
 artifacts:
   files:
-
     - imageDetail.json
-
-env:
-  exported-variables:
-    - ImageURI
-
-
-
-
-
-
-
+    - taskdef.json
+    - appspec.yaml
