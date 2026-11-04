@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  demo-app-pipeline - builds, tests and releases the Greeter demo app (app.yaml).
+  demo-app-browser-testing-pipeline - builds, browser-tests and releases the Greeter demo app (app.yaml).
   Source -> Build (unit tests, package) -> DeployTest (stack demo-app-test + website) -> BrowserTests
   (Playwright in CodeBuild) -> Approval -> DeployProd (stack demo-app-prod + website + smoke test;
   rolls back to the last good release if any step fails).
@@ -224,7 +224,7 @@ Resources:
   Pipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
-      Name: !Sub ${AppName}-pipeline
+      Name: !Sub ${AppName}-browser-testing-pipeline
       PipelineType: V2
       ExecutionMode: QUEUED
       RoleArn: !GetAtt PipelineRole.Arn
@@ -233,7 +233,10 @@ Resources:
         - ProviderType: CodeStarSourceConnection
           GitConfiguration:
             SourceActionName: GitHub
-            Push: [{ Branches: { Includes: [!Ref BranchName] } }]
+            Push:
+              - Branches: { Includes: [!Ref BranchName] }
+                FilePaths:   # changing only the pipeline definition or docs does not release a new version
+                  Excludes: [pipeline.yaml, "**/*.md"]
       Stages:
         - Name: Source
           Actions:
