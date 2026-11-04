@@ -1,0 +1,389 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  apache-cfn - one-time setup: ECR repo, log group, port rules, IAM roles, CodeBuild projects,
+  the release pipeline (branch bg-cfn) and the on-request cleanup pipeline.
+
+Parameters:
+  ConnectionArn:
+    Type: String
+    Default: arn:aws:codeconnections:us-east-1:058264351046:connection/d57bdd7d-ac26-40c3-8f78-cd9951c91c6d
+  RepositoryId:
+    Type: String
+    Default: MahmoudFathi/apache-service
+  BranchName:
+    Type: String
+    Default: bg-cfn
+  SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Default: sg-0932f676120e18854
+  LoadBalancerDns:
+    Type: String
+    Default: apache-service-alb-1008050539.us-east-1.elb.amazonaws.com
+  ProdTaskCount:
+    Type: Number
+    Default: 2
+    Description: Tasks a version runs once promoted to live (testing uses 1)
+
+Resources:
+  # ---------- Shared resources ----------
+  Repository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: apache-cfn
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: >-
+          {"rules":[{"rulePriority":1,"description":"Keep the last 20 images",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":20},
+          "action":{"type":"expire"}}]}
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/apache-cfn
+      RetentionInDays: 7
+
+  LivePortIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SecurityGroupId
+      IpProtocol: tcp
+      FromPort: 84
+      ToPort: 84
+      CidrIp: 0.0.0.0/0
+      Description: apache-cfn live
+
+  TestPortIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SecurityGroupId
+      IpProtocol: tcp
+      FromPort: 8084
+      ToPort: 8084
+      CidrIp: 0.0.0.0/0
+      Description: apache-cfn test
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub apache-cfn-artifacts-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-artifacts
+            Status: Enabled
+            ExpirationInDays: 30
+
+  # ---------- IAM ----------
+  # Role CloudFormation uses to create/update/delete the version stacks and the router stack
+  CfnDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: apache-cfn-cloudformation-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudformation.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: deploy-versions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - elasticloadbalancing:*
+                  - ecs:CreateService
+                  - ecs:UpdateService
+                  - ecs:DeleteService
+                  - ecs:DescribeServices
+                  - ecs:RegisterTaskDefinition
+                  - ecs:DeregisterTaskDefinition
+                  - ecs:DescribeTaskDefinition
+                  - ecs:TagResource
+                  - ecs:UntagResource
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                Resource: "*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole
+                Condition:
+                  StringEquals: { "iam:PassedToService": ecs-tasks.amazonaws.com }
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: apache-cfn-codebuild-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: build-and-route
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/apache-cfn-*
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject, s3:GetBucketLocation]
+                Resource: [!GetAtt ArtifactBucket.Arn, !Sub "${ArtifactBucket.Arn}/*"]
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !GetAtt Repository.Arn
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/apache-cfn-*
+              - Effect: Allow
+                Action: [cloudformation:GetTemplateSummary, cloudformation:ValidateTemplate, cloudformation:ListStacks]
+                Resource: "*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CfnDeployRole.Arn
+
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: apache-cfn-pipeline-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codepipeline.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: run-pipeline
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [codeconnections:UseConnection, codestar-connections:UseConnection]
+                Resource: !Ref ConnectionArn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject, s3:GetBucketVersioning, s3:GetBucketLocation, s3:ListBucket]
+                Resource: [!GetAtt ArtifactBucket.Arn, !Sub "${ArtifactBucket.Arn}/*"]
+              - Effect: Allow
+                Action: [codebuild:StartBuild, codebuild:BatchGetBuilds]
+                Resource: !Sub arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/apache-cfn-*
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:SetStackPolicy
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/apache-cfn-*
+              - Effect: Allow
+                Action: cloudformation:ValidateTemplate
+                Resource: "*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CfnDeployRole.Arn
+
+  # ---------- CodeBuild projects ----------
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: apache-cfn-build
+      Description: Build the image, push it to ECR apache-cfn, write version-params.json
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Source: { Type: CODEPIPELINE, BuildSpec: buildspec-cfn.yml }
+      Artifacts: { Type: CODEPIPELINE }
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: true
+      TimeoutInMinutes: 20
+
+  RouteProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: apache-cfn-route
+      Description: Point the test or live listener at a version (updates stack apache-cfn-router)
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Source: { Type: CODEPIPELINE, BuildSpec: buildspec-route.yml }
+      Artifacts: { Type: CODEPIPELINE }
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        EnvironmentVariables:
+          - { Name: CFN_ROLE_ARN, Value: !GetAtt CfnDeployRole.Arn }
+          - { Name: PROD_COUNT, Value: !Ref ProdTaskCount }
+      TimeoutInMinutes: 30
+
+  CleanupProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: apache-cfn-cleanup
+      Description: Delete one old version stack on request (never the live or test version)
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Source: { Type: CODEPIPELINE, BuildSpec: buildspec-cleanup.yml }
+      Artifacts: { Type: CODEPIPELINE }
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        EnvironmentVariables:
+          - { Name: CFN_ROLE_ARN, Value: !GetAtt CfnDeployRole.Arn }
+      TimeoutInMinutes: 30
+
+  # ---------- Release pipeline ----------
+  ReleasePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: [LivePortIngress, TestPortIngress, LogGroup]
+    Properties:
+      Name: apache-cfn-pipeline
+      PipelineType: V2
+      ExecutionMode: QUEUED
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore: { Type: S3, Location: !Ref ArtifactBucket }
+      Triggers:
+        - ProviderType: CodeStarSourceConnection
+          GitConfiguration:
+            SourceActionName: GitHub
+            Push:
+              - Branches:
+                  Includes: [!Ref BranchName]
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHub
+              ActionTypeId: { Category: Source, Owner: AWS, Provider: CodeStarSourceConnection, Version: "1" }
+              Configuration:
+                ConnectionArn: !Ref ConnectionArn
+                FullRepositoryId: !Ref RepositoryId
+                BranchName: !Ref BranchName
+                OutputArtifactFormat: CODE_ZIP
+              OutputArtifacts: [{ Name: SourceArtifact }]
+        - Name: Build
+          Actions:
+            - Name: BuildImage
+              Namespace: BuildVars
+              ActionTypeId: { Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1" }
+              Configuration: { ProjectName: !Ref BuildProject }
+              InputArtifacts: [{ Name: SourceArtifact }]
+              OutputArtifacts: [{ Name: BuildArtifact }]
+        - Name: DeployVersion
+          Actions:
+            - Name: CreateVersionStack
+              Namespace: DeployVars
+              ActionTypeId: { Category: Deploy, Owner: AWS, Provider: CloudFormation, Version: "1" }
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: "apache-cfn-#{BuildVars.VERSION}"
+                TemplatePath: SourceArtifact::cfn/service-version.yaml
+                TemplateConfiguration: BuildArtifact::version-params.json
+                RoleArn: !GetAtt CfnDeployRole.Arn
+              InputArtifacts: [{ Name: SourceArtifact }, { Name: BuildArtifact }]
+        - Name: RouteTest
+          Actions:
+            - Name: PointTestPortToNewVersion
+              ActionTypeId: { Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1" }
+              Configuration:
+                ProjectName: !Ref RouteProject
+                EnvironmentVariables: >-
+                  [{"name":"MODE","value":"test","type":"PLAINTEXT"},
+                  {"name":"VERSION","value":"#{BuildVars.VERSION}","type":"PLAINTEXT"},
+                  {"name":"TG_ARN","value":"#{DeployVars.TargetGroupArn}","type":"PLAINTEXT"}]
+              InputArtifacts: [{ Name: SourceArtifact }]
+        - Name: Approval
+          Actions:
+            - Name: TestAndApprove
+              ActionTypeId: { Category: Approval, Owner: AWS, Provider: Manual, Version: "1" }
+              Configuration:
+                CustomData: !Sub >-
+                  Version #{BuildVars.VERSION} is running with 1 task on the TEST port 8084 (target group #{DeployVars.TargetGroupName}).
+                  Live users are on port 84. Test it, then Approve to scale it to ${ProdTaskCount} tasks and switch live traffic,
+                  or Reject to keep the current live version.
+                ExternalEntityLink: !Sub http://${LoadBalancerDns}:8084
+        - Name: SwitchLive
+          Actions:
+            - Name: PromoteToLive
+              ActionTypeId: { Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1" }
+              Configuration:
+                ProjectName: !Ref RouteProject
+                EnvironmentVariables: >-
+                  [{"name":"MODE","value":"live","type":"PLAINTEXT"},
+                  {"name":"VERSION","value":"#{BuildVars.VERSION}","type":"PLAINTEXT"},
+                  {"name":"TG_ARN","value":"#{DeployVars.TargetGroupArn}","type":"PLAINTEXT"}]
+              InputArtifacts: [{ Name: SourceArtifact }]
+
+  # ---------- Cleanup pipeline (runs only when you start it) ----------
+  CleanupPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: apache-cfn-cleanup
+      PipelineType: V2
+      ExecutionMode: QUEUED
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore: { Type: S3, Location: !Ref ArtifactBucket }
+      Variables:
+        - Name: VersionToDelete
+          DefaultValue: none
+          Description: Version to delete, for example v3. Never the live or test version.
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHub
+              ActionTypeId: { Category: Source, Owner: AWS, Provider: CodeStarSourceConnection, Version: "1" }
+              Configuration:
+                ConnectionArn: !Ref ConnectionArn
+                FullRepositoryId: !Ref RepositoryId
+                BranchName: !Ref BranchName
+                OutputArtifactFormat: CODE_ZIP
+                DetectChanges: "false"
+              OutputArtifacts: [{ Name: SourceArtifact }]
+        - Name: DeleteVersion
+          Actions:
+            - Name: DeleteVersionStack
+              ActionTypeId: { Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1" }
+              Configuration:
+                ProjectName: !Ref CleanupProject
+                EnvironmentVariables: >-
+                  [{"name":"VERSION_TO_DELETE","value":"#{variables.VersionToDelete}","type":"PLAINTEXT"}]
+              InputArtifacts: [{ Name: SourceArtifact }]
+
+Outputs:
+  RepositoryUri:
+    Value: !GetAtt Repository.RepositoryUri
+  LiveUrl:
+    Value: !Sub http://${LoadBalancerDns}:84
+  TestUrl:
+    Value: !Sub http://${LoadBalancerDns}:8084
+  CloudFormationRoleArn:
+    Value: !GetAtt CfnDeployRole.Arn

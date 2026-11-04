@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  One version of the Apache app (stack apache-cfn-<version>): its own target group, task definition and
+  ECS service. Starts with 1 task for testing; the pipeline raises DesiredCount to 2 when it is promoted.
+
+Parameters:
+  Version:
+    Type: String
+    AllowedPattern: "^v[0-9]+$"
+    Description: Version label, e.g. v3 (from the CodeBuild build number)
+  Priority:
+    Type: Number
+    MinValue: 1
+    MaxValue: 50000
+    Description: Unique listener-rule priority (the build number)
+  ImageUri:
+    Type: String
+  DesiredCount:
+    Type: Number
+    Default: 1
+  ClusterName:
+    Type: String
+    Default: apache-service-cluster
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-0e4481f872cb2bbcd
+  Subnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Default: subnet-088c6dfa66ca108fa,subnet-0db0721632cfd6115
+  SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Default: sg-0932f676120e18854
+  ExecutionRoleArn:
+    Type: String
+    Default: arn:aws:iam::058264351046:role/ecsTaskExecutionRole
+  LogGroupName:
+    Type: String
+    Default: /ecs/apache-cfn
+
+Resources:
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub apache-cfn-${Version}
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 80
+      TargetType: ip
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: "30"
+      Tags:
+        - Key: version
+          Value: !Ref Version
+
+  # ECS only accepts a target group that is attached to a load balancer. This rule attaches it to the
+  # TEST listener and also lets you reach this exact version any time with the header  X-Version: <version>
+  VersionRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !ImportValue apache-cfn-router-TestListenerArn
+      Priority: !Ref Priority
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: X-Version
+            Values:
+              - !Ref Version
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: apache-cfn
+      Cpu: "256"
+      Memory: "512"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !Ref ExecutionRoleArn
+      ContainerDefinitions:
+        - Name: my-apache
+          Image: !Ref ImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroupName
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Ref Version
+      Tags:
+        - Key: version
+          Value: !Ref Version
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: VersionRule
+    Properties:
+      ServiceName: !Sub apache-cfn-${Version}
+      Cluster: !Ref ClusterName
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      TaskDefinition: !Ref TaskDefinition
+      HealthCheckGracePeriodSeconds: 30
+      DeploymentConfiguration:
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      LoadBalancers:
+        - ContainerName: my-apache
+          ContainerPort: 80
+          TargetGroupArn: !Ref TargetGroup
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Ref Subnets
+          SecurityGroups:
+            - !Ref SecurityGroupId
+      Tags:
+        - Key: version
+          Value: !Ref Version
+
+Outputs:
+  Version:
+    Value: !Ref Version
+  TargetGroupArn:
+    Value: !Ref TargetGroup
+  TargetGroupName:
+    Value: !GetAtt TargetGroup.TargetGroupName
+  ServiceName:
+    Value: !GetAtt Service.Name

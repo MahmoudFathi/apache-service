@@ -1,0 +1,28 @@
+# apache-cfn-cleanup pipeline - deletes ONE old version when you ask for it.
+# Start the pipeline with the variable VersionToDelete=v<N>. It refuses to delete the LIVE or TEST version.
+# Set by the pipeline: VERSION_TO_DELETE.  Set on the project: CFN_ROLE_ARN.
+version: 0.2
+
+phases:
+  build:
+    commands:
+      - |
+        V="$VERSION_TO_DELETE"
+        LIVE=$(aws cloudformation describe-stacks --stack-name apache-cfn-router --query "Stacks[0].Outputs[?OutputKey=='LiveVersion'].OutputValue" --output text)
+        TEST=$(aws cloudformation describe-stacks --stack-name apache-cfn-router --query "Stacks[0].Outputs[?OutputKey=='TestVersion'].OutputValue" --output text)
+        echo "Requested: '$V'   Live: $LIVE   Test: $TEST"
+        echo "Version stacks:"
+        aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE \
+          --query "StackSummaries[?starts_with(StackName,'apache-cfn-v')].StackName" --output text | tr '\t' '\n' | sort -V
+        if ! echo "$V" | grep -Eq '^v[0-9]+$'; then
+          echo "Nothing deleted. Start this pipeline with VersionToDelete=v<N> (for example v3)."
+        elif [ "$V" = "$LIVE" ] || [ "$V" = "$TEST" ]; then
+          echo "REFUSED: $V is the current LIVE or TEST version."; exit 1
+        elif ! aws cloudformation describe-stacks --stack-name apache-cfn-$V >/dev/null 2>&1; then
+          echo "REFUSED: stack apache-cfn-$V does not exist."; exit 1
+        else
+          echo "Deleting apache-cfn-$V (service, task definition, target group, test rule)..."
+          aws cloudformation delete-stack --stack-name apache-cfn-$V --role-arn $CFN_ROLE_ARN || exit 1
+          aws cloudformation wait stack-delete-complete --stack-name apache-cfn-$V || exit 1
+          echo "Deleted $V."
+        fi

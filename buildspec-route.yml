@@ -1,0 +1,32 @@
+# apache-cfn pipeline - RouteTest and SwitchLive stages
+# MODE=test : point the TEST listener (8084) at the new version.
+# MODE=live : scale the new version to PROD_COUNT tasks, then point the LIVE listener (84) at it.
+# Both are CloudFormation updates of apache-cfn-router, so the listeners never drift from their template.
+# Set by the pipeline: MODE, VERSION, TG_ARN.  Set on the project: CFN_ROLE_ARN, PROD_COUNT.
+version: 0.2
+
+phases:
+  build:
+    commands:
+      - |
+        echo "Mode: $MODE   Version: $VERSION"
+        echo "Target group: $TG_ARN"
+        if ! echo "$VERSION" | grep -Eq '^v[0-9]+$'; then echo "Invalid VERSION '$VERSION'"; exit 1; fi
+        if [ "$MODE" = "test" ]; then
+          aws cloudformation deploy --stack-name apache-cfn-router --template-file cfn/router.yaml \
+            --parameter-overrides TestTargetGroupArn=$TG_ARN TestVersion=$VERSION \
+            --role-arn $CFN_ROLE_ARN --no-fail-on-empty-changeset || exit 1
+          echo "TEST port now serves $VERSION"
+        elif [ "$MODE" = "live" ]; then
+          echo "Scaling apache-cfn-$VERSION to $PROD_COUNT tasks before it takes live traffic..."
+          aws cloudformation deploy --stack-name apache-cfn-$VERSION --template-file cfn/service-version.yaml \
+            --parameter-overrides DesiredCount=$PROD_COUNT \
+            --role-arn $CFN_ROLE_ARN --no-fail-on-empty-changeset || exit 1
+          aws cloudformation deploy --stack-name apache-cfn-router --template-file cfn/router.yaml \
+            --parameter-overrides LiveTargetGroupArn=$TG_ARN LiveVersion=$VERSION \
+            --role-arn $CFN_ROLE_ARN --no-fail-on-empty-changeset || exit 1
+          echo "LIVE port now serves $VERSION with $PROD_COUNT tasks"
+        else
+          echo "Unknown MODE '$MODE'"; exit 1
+        fi
+      - aws cloudformation describe-stacks --stack-name apache-cfn-router --query "Stacks[0].Outputs[?contains(OutputKey,'Version')].[OutputKey,OutputValue]" --output table

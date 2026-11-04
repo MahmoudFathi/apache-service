@@ -1,0 +1,83 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  apache-cfn router - owns the LIVE and TEST listeners and decides which version each one serves.
+  The pipeline updates only the two TargetGroupArn/Version pairs; switching or rolling back = one stack update.
+
+Parameters:
+  LoadBalancerArn:
+    Type: String
+    Default: arn:aws:elasticloadbalancing:us-east-1:058264351046:loadbalancer/app/apache-service-alb/08d34e784f26b114
+  LivePort:
+    Type: Number
+    Default: 84
+  TestPort:
+    Type: Number
+    Default: 8084
+  LiveTargetGroupArn:
+    Type: String
+    Default: ""
+    Description: Target group of the version users see. Empty = no live version yet (503).
+  LiveVersion:
+    Type: String
+    Default: none
+  TestTargetGroupArn:
+    Type: String
+    Default: ""
+    Description: Target group of the version under test. Empty = nothing under test (503).
+  TestVersion:
+    Type: String
+    Default: none
+
+Conditions:
+  HasLive: !Not [!Equals [!Ref LiveTargetGroupArn, ""]]
+  HasTest: !Not [!Equals [!Ref TestTargetGroupArn, ""]]
+
+Resources:
+  LiveListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancerArn
+      Port: !Ref LivePort
+      Protocol: HTTP
+      DefaultActions:
+        - !If
+          - HasLive
+          - Type: forward
+            TargetGroupArn: !Ref LiveTargetGroupArn
+          - Type: fixed-response
+            FixedResponseConfig:
+              StatusCode: "503"
+              ContentType: text/plain
+              MessageBody: No live version yet - approve a version in apache-cfn-pipeline
+
+  TestListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancerArn
+      Port: !Ref TestPort
+      Protocol: HTTP
+      DefaultActions:
+        - !If
+          - HasTest
+          - Type: forward
+            TargetGroupArn: !Ref TestTargetGroupArn
+          - Type: fixed-response
+            FixedResponseConfig:
+              StatusCode: "503"
+              ContentType: text/plain
+              MessageBody: No version under test
+
+Outputs:
+  LiveVersion:
+    Value: !Ref LiveVersion
+  LiveTargetGroupArn:
+    Value: !If [HasLive, !Ref LiveTargetGroupArn, none]
+  TestVersion:
+    Value: !Ref TestVersion
+  TestTargetGroupArn:
+    Value: !If [HasTest, !Ref TestTargetGroupArn, none]
+  TestListenerArn:
+    Description: Version stacks attach their target group here (via a header rule) so ECS accepts it
+    Value: !Ref TestListener
+    Export:
+      Name: apache-cfn-router-TestListenerArn

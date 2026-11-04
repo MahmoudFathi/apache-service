@@ -13,6 +13,10 @@ RUN echo '. /etc/apache2/envvars' > /root/run_apache.sh && \
  echo '/usr/sbin/apache2 -D FOREGROUND' >> /root/run_apache.sh && \ 
  chmod 755 /root/run_apache.sh
 
+# Show the version (set by the apache-cfn pipeline) on the page
+ARG APP_VERSION=dev
+RUN sed -i "s|</h2>|</h2><p style=font-size:24px>Version: ${APP_VERSION}</p>|" /var/www/html/index.html
+
 EXPOSE 80 8080
 
 

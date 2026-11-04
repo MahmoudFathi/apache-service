@@ -1,0 +1,36 @@
+# apache-cfn pipeline - Build stage
+# Builds the image, tags it with the version (v<build number>), pushes it to ECR repo apache-cfn,
+# and writes version-params.json for the CloudFormation DeployVersion stage.
+version: 0.2
+
+env:
+  variables:
+    REPO_NAME: apache-cfn
+  exported-variables:
+    - VERSION
+    - IMAGE_URI
+
+phases:
+  pre_build:
+    on-failure: ABORT
+    commands:
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - REGISTRY=$ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - VERSION=v$CODEBUILD_BUILD_NUMBER
+      - IMAGE_URI=$REGISTRY/$REPO_NAME:$VERSION
+      - echo "Building version $VERSION -> $IMAGE_URI"
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $REGISTRY
+  build:
+    on-failure: ABORT
+    commands:
+      - docker build --build-arg APP_VERSION=$VERSION -t $IMAGE_URI .
+  post_build:
+    on-failure: ABORT
+    commands:
+      - docker push $IMAGE_URI
+      - printf '{"Parameters":{"Version":"%s","Priority":"%s","ImageUri":"%s"},"Tags":{"app":"apache-cfn","version":"%s"}}' $VERSION $CODEBUILD_BUILD_NUMBER $IMAGE_URI $VERSION > version-params.json
+      - cat version-params.json
+
+artifacts:
+  files:
+    - version-params.json
