@@ -1,0 +1,40 @@
+# demo-app-pipeline - Build stage (CodeBuild project demo-app-build)
+# Runs the Lambda unit tests, packages app.yaml (uploads src/ to S3) and writes the parameter files
+# for the test and prod stacks. Exports VERSION (v<build number>).
+# Set on the project: ARTIFACT_BUCKET.
+version: 0.2
+
+env:
+  exported-variables:
+    - VERSION
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install --quiet --disable-pip-version-check pytest
+  pre_build:
+    on-failure: ABORT
+    commands:
+      - VERSION=v$CODEBUILD_BUILD_NUMBER
+      - echo "Version $VERSION - running unit tests"
+      - python -m pytest tests/unit -q --junitxml=reports/unit.xml
+  build:
+    on-failure: ABORT
+    commands:
+      - aws cloudformation package --template-file app.yaml --s3-bucket $ARTIFACT_BUCKET --s3-prefix lambda --output-template-file packaged.yaml
+      - printf '{"Parameters":{"EnvName":"test","AppVersion":"%s"},"Tags":{"app":"demo-app","env":"test"}}' $VERSION > test-params.json
+      - printf '{"Parameters":{"EnvName":"prod","AppVersion":"%s"},"Tags":{"app":"demo-app","env":"prod"}}' $VERSION > prod-params.json
+
+reports:
+  unit-tests:
+    files:
+      - reports/unit.xml
+    file-format: JUNITXML
+
+artifacts:
+  files:
+    - packaged.yaml
+    - test-params.json
+    - prod-params.json

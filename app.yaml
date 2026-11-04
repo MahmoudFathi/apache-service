@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Greeter demo app (one environment): S3 static website + API Gateway HTTP API + Lambda.
+  Deployed twice by demo-app-pipeline - stacks demo-app-test and demo-app-prod. Package it first
+  (aws cloudformation package) so Code: src/ is uploaded to S3.
+
+Parameters:
+  EnvName:
+    Type: String
+    AllowedValues: [test, prod]
+    Description: Environment - becomes part of every resource name
+  AppVersion:
+    Type: String
+    Default: dev
+    Description: Version label returned by the API and shown on the page (the pipeline sets v<build number>)
+
+Resources:
+  # ---------- Back end: Lambda ----------
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  FunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/demo-app-${EnvName}-greet
+      RetentionInDays: 7
+
+  GreetFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: FunctionLogs
+    Properties:
+      FunctionName: !Sub demo-app-${EnvName}-greet
+      Description: !Sub Greeter API (${EnvName})
+      Runtime: python3.12
+      Architectures: [arm64]
+      MemorySize: 128
+      Timeout: 5
+      Handler: app.handler
+      Code: src/
+      Role: !GetAtt FunctionRole.Arn
+      Environment:
+        Variables:
+          APP_VERSION: !Ref AppVersion
+          ENV_NAME: !Ref EnvName
+
+  # ---------- API: HTTP API with two routes ----------
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub demo-app-${EnvName}-api
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins: [!GetAtt WebsiteBucket.WebsiteURL]
+        AllowMethods: [GET]
+        AllowHeaders: [content-type]
+        MaxAge: 300
+
+  LambdaIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt GreetFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  GreetRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /greet
+      Target: !Sub integrations/${LambdaIntegration}
+
+  HealthRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: GET /health
+      Target: !Sub integrations/${LambdaIntegration}
+
+  DefaultStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 20
+        ThrottlingRateLimit: 10
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref GreetFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*
+
+  # ---------- Front end: public S3 static website ----------
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub demo-app-${EnvName}-web-${AWS::AccountId}
+      WebsiteConfiguration:
+        IndexDocument: index.html
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      PublicAccessBlockConfiguration:   # public read is the point of a static website bucket
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: false
+        RestrictPublicBuckets: false
+
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadForWebsite
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "${WebsiteBucket.Arn}/*"
+
+Outputs:
+  WebsiteUrl:
+    Value: !GetAtt WebsiteBucket.WebsiteURL
+  ApiUrl:
+    Value: !GetAtt HttpApi.ApiEndpoint
+  BucketName:
+    Value: !Ref WebsiteBucket
+  FunctionName:
+    Value: !Ref GreetFunction
+  Version:
+    Value: !Ref AppVersion

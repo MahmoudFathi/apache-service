@@ -1,0 +1,18 @@
+# demo-app-pipeline - publish the website (CodeBuild project demo-app-web)
+# Reads the stack's outputs, writes web/config.js with that environment's API URL, and syncs web/ to its bucket.
+# Set by the pipeline: STACK_NAME (demo-app-test | demo-app-prod), ENV_NAME (test | prod).
+version: 0.2
+
+phases:
+  build:
+    commands:
+      - |
+        out() { aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
+        BUCKET=$(out BucketName) || exit 1
+        API=$(out ApiUrl); SITE=$(out WebsiteUrl)
+        echo "Stack $STACK_NAME -> bucket $BUCKET, API $API"
+        printf 'window.APP_CONFIG = { apiUrl: "%s", env: "%s" };\n' "$API" "$ENV_NAME" > web/config.js
+        cat web/config.js
+        # --delete removes old files; reports/ (browser test reports) is left alone
+        aws s3 sync web/ s3://$BUCKET/ --delete --exclude "reports/*" --cache-control "no-cache" || exit 1
+        echo "Website published: $SITE"

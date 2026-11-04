@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Greeter</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>Greeter</h1>
+    <p class="meta">Version <span id="version" data-testid="version">loading…</span> · <span id="env" data-testid="env"></span></p>
+
+    <form id="greet-form" novalidate>
+      <label for="name">Your name</label>
+      <div class="row">
+        <input id="name" name="name" type="text" autocomplete="off" placeholder="e.g. Sam" data-testid="name-input">
+        <button id="greet" type="submit" data-testid="greet-button">Greet</button>
+      </div>
+    </form>
+
+    <p id="result" class="result" data-testid="result" aria-live="polite"></p>
+    <p id="error" class="error" data-testid="error" role="alert"></p>
+  </main>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,351 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  demo-app-pipeline - builds, tests and releases the Greeter demo app (app.yaml).
+  Source -> Build (unit tests, package) -> DeployTest (stack demo-app-test + website) -> BrowserTests
+  (Playwright in CodeBuild) -> Approval -> DeployProd (stack demo-app-prod + website + smoke test;
+  rolls back to the last good release if any step fails).
+
+Parameters:
+  ConnectionArn:
+    Type: String
+    Description: ARN of an AVAILABLE CodeStar/CodeConnections GitHub connection
+    Default: arn:aws:codeconnections:us-east-1:058264351046:connection/d57bdd7d-ac26-40c3-8f78-cd9951c91c6d
+  RepositoryId:
+    Type: String
+    Default: MahmoudFathi/apache-service
+    Description: GitHub owner/repository holding the app
+  BranchName:
+    Type: String
+    Default: demo-app
+  AppName:
+    Type: String
+    Default: demo-app
+    AllowedPattern: "^[a-z][a-z0-9-]{1,20}$"
+    Description: Prefix of the app stacks (<AppName>-test, <AppName>-prod) and of every resource here
+
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AppName}-pipeline-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-artifacts
+            Status: Enabled
+            ExpirationInDays: 30
+
+  # ---------- IAM ----------
+  # CloudFormation uses this role to create/update the app stacks (Lambda, API, website bucket, log group)
+  CloudFormationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-cloudformation-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: cloudformation.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: deploy-app
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:*
+                Resource: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${AppName}-*
+              - Effect: Allow
+                Action: apigateway:*
+                Resource: !Sub arn:aws:apigateway:${AWS::Region}::/*
+              - Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub arn:aws:s3:::${AppName}-*-web-${AWS::AccountId}
+                  - !Sub arn:aws:s3:::${AppName}-*-web-${AWS::AccountId}/*
+              - Effect: Allow   # Lambda reads the packaged code with the caller's permissions
+                Action: [s3:GetObject, s3:GetObjectVersion]
+                Resource: !Sub "${ArtifactBucket.Arn}/*"
+              - Effect: Allow
+                Action: logs:*
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AppName}-*
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: "*"
+              - Effect: Allow   # the Lambda execution role created by each app stack
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/${AppName}-*
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/${AppName}-*
+                Condition:
+                  StringEquals: { "iam:PassedToService": lambda.amazonaws.com }
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-codebuild-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: build-test-publish
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${AppName}-*
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject, s3:GetBucketLocation, s3:ListBucket]
+                Resource: [!GetAtt ArtifactBucket.Arn, !Sub "${ArtifactBucket.Arn}/*"]
+              - Effect: Allow   # publish the website and the browser test reports
+                Action: [s3:ListBucket, s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource:
+                  - !Sub arn:aws:s3:::${AppName}-*-web-${AWS::AccountId}
+                  - !Sub arn:aws:s3:::${AppName}-*-web-${AWS::AccountId}/*
+              - Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AppName}-*
+              - Effect: Allow   # CodeBuild test reports (unit + browser)
+                Action:
+                  - codebuild:CreateReportGroup
+                  - codebuild:CreateReport
+                  - codebuild:UpdateReport
+                  - codebuild:BatchPutTestCases
+                Resource: !Sub arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${AppName}-*
+
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AppName}-pipeline-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codepipeline.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: run-pipeline
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [codeconnections:UseConnection, codestar-connections:UseConnection]
+                Resource: !Ref ConnectionArn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject, s3:GetBucketVersioning, s3:GetBucketLocation, s3:ListBucket]
+                Resource: [!GetAtt ArtifactBucket.Arn, !Sub "${ArtifactBucket.Arn}/*"]
+              - Effect: Allow
+                Action: [codebuild:StartBuild, codebuild:BatchGetBuilds]
+                Resource: !Sub arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/${AppName}-*
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:SetStackPolicy
+                Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AppName}-*
+              - Effect: Allow
+                Action: cloudformation:ValidateTemplate
+                Resource: "*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationRole.Arn
+
+  # ---------- CodeBuild projects ----------
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${AppName}-build
+      Description: Unit tests + package the app template
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Source: { Type: CODEPIPELINE, BuildSpec: buildspec-build.yml }
+      Artifacts: { Type: CODEPIPELINE }
+      TimeoutInMinutes: 15
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        EnvironmentVariables:
+          - { Name: ARTIFACT_BUCKET, Value: !Ref ArtifactBucket }
+
+  WebProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${AppName}-web
+      Description: Publish the website (config.js + files) to an environment's bucket
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Source: { Type: CODEPIPELINE, BuildSpec: buildspec-web.yml }
+      Artifacts: { Type: CODEPIPELINE }
+      TimeoutInMinutes: 10
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+
+  E2EProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${AppName}-e2e
+      Description: Browser tests with Playwright (headless Chromium)
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Source: { Type: CODEPIPELINE, BuildSpec: buildspec-e2e.yml }
+      Artifacts: { Type: CODEPIPELINE }
+      TimeoutInMinutes: 20
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM   # 7 GB memory: more headroom for the browser
+        Image: aws/codebuild/standard:7.0
+
+  # ---------- Pipeline ----------
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub ${AppName}-pipeline
+      PipelineType: V2
+      ExecutionMode: QUEUED
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore: { Type: S3, Location: !Ref ArtifactBucket }
+      Triggers:
+        - ProviderType: CodeStarSourceConnection
+          GitConfiguration:
+            SourceActionName: GitHub
+            Push: [{ Branches: { Includes: [!Ref BranchName] } }]
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHub
+              ActionTypeId: { Category: Source, Owner: AWS, Provider: CodeStarSourceConnection, Version: "1" }
+              Configuration:
+                ConnectionArn: !Ref ConnectionArn
+                FullRepositoryId: !Ref RepositoryId
+                BranchName: !Ref BranchName
+                OutputArtifactFormat: CODE_ZIP
+              OutputArtifacts: [{ Name: SourceArtifact }]
+
+        - Name: Build
+          Actions:
+            - Name: UnitTestAndPackage
+              Namespace: BuildVars
+              ActionTypeId: { Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1" }
+              Configuration: { ProjectName: !Ref BuildProject }
+              InputArtifacts: [{ Name: SourceArtifact }]
+              OutputArtifacts: [{ Name: BuildArtifact }]
+
+        - Name: DeployTest
+          Actions:
+            - Name: DeployStack
+              Namespace: TestStack
+              RunOrder: 1
+              ActionTypeId: { Category: Deploy, Owner: AWS, Provider: CloudFormation, Version: "1" }
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: !Sub ${AppName}-test
+                TemplatePath: BuildArtifact::packaged.yaml
+                TemplateConfiguration: BuildArtifact::test-params.json
+                Capabilities: CAPABILITY_IAM
+                RoleArn: !GetAtt CloudFormationRole.Arn
+              InputArtifacts: [{ Name: BuildArtifact }]
+            - Name: PublishWebsite
+              RunOrder: 2
+              ActionTypeId: { Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1" }
+              Configuration:
+                ProjectName: !Ref WebProject
+                EnvironmentVariables: !Sub >-
+                  [{"name":"STACK_NAME","value":"${AppName}-test","type":"PLAINTEXT"},
+                  {"name":"ENV_NAME","value":"test","type":"PLAINTEXT"}]
+              InputArtifacts: [{ Name: SourceArtifact }]
+
+        - Name: BrowserTests
+          Actions:
+            - Name: Playwright
+              ActionTypeId: { Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1" }
+              Configuration:
+                ProjectName: !Ref E2EProject
+                EnvironmentVariables: !Sub >-
+                  [{"name":"STACK_NAME","value":"${AppName}-test","type":"PLAINTEXT"},
+                  {"name":"VERSION","value":"#{BuildVars.VERSION}","type":"PLAINTEXT"},
+                  {"name":"PUBLISH_REPORT","value":"true","type":"PLAINTEXT"}]
+              InputArtifacts: [{ Name: SourceArtifact }]
+              OutputArtifacts: [{ Name: BrowserTestReport }]
+
+        - Name: Approval
+          Actions:
+            - Name: ReviewAndApprove
+              ActionTypeId: { Category: Approval, Owner: AWS, Provider: Manual, Version: "1" }
+              Configuration:
+                CustomData: >-
+                  Version #{BuildVars.VERSION} passed the unit and browser tests on TEST.
+                  Browser test report: #{TestStack.WebsiteUrl}/reports/#{BuildVars.VERSION}/index.html
+                  - try the app yourself with the link below, then Approve to release it to PROD.
+                ExternalEntityLink: "#{TestStack.WebsiteUrl}"
+
+        - Name: DeployProd
+          OnFailure:
+            Result: ROLLBACK      # any failed step (including the smoke test) restores the last good release
+          Actions:
+            - Name: DeployStack
+              Namespace: ProdStack
+              RunOrder: 1
+              ActionTypeId: { Category: Deploy, Owner: AWS, Provider: CloudFormation, Version: "1" }
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: !Sub ${AppName}-prod
+                TemplatePath: BuildArtifact::packaged.yaml
+                TemplateConfiguration: BuildArtifact::prod-params.json
+                Capabilities: CAPABILITY_IAM
+                RoleArn: !GetAtt CloudFormationRole.Arn
+              InputArtifacts: [{ Name: BuildArtifact }]
+            - Name: PublishWebsite
+              RunOrder: 2
+              ActionTypeId: { Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1" }
+              Configuration:
+                ProjectName: !Ref WebProject
+                EnvironmentVariables: !Sub >-
+                  [{"name":"STACK_NAME","value":"${AppName}-prod","type":"PLAINTEXT"},
+                  {"name":"ENV_NAME","value":"prod","type":"PLAINTEXT"}]
+              InputArtifacts: [{ Name: SourceArtifact }]
+            - Name: SmokeTest
+              RunOrder: 3
+              ActionTypeId: { Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1" }
+              Configuration:
+                ProjectName: !Ref E2EProject
+                EnvironmentVariables: !Sub >-
+                  [{"name":"STACK_NAME","value":"${AppName}-prod","type":"PLAINTEXT"},
+                  {"name":"VERSION","value":"#{BuildVars.VERSION}","type":"PLAINTEXT"},
+                  {"name":"GREP","value":"@smoke","type":"PLAINTEXT"},
+                  {"name":"PUBLISH_REPORT","value":"false","type":"PLAINTEXT"}]
+              InputArtifacts: [{ Name: SourceArtifact }]
+
+Outputs:
+  PipelineName:
+    Value: !Ref Pipeline
+  ArtifactBucketName:
+    Value: !Ref ArtifactBucket
+  TestStackName:
+    Value: !Sub ${AppName}-test
+  ProdStackName:
+    Value: !Sub ${AppName}-prod
