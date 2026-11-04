@@ -1,5 +1,7 @@
-# apache-cfn-cleanup pipeline - deletes ONE old version when you ask for it.
-# Start the pipeline with the variable VersionToDelete=v<N>. It refuses to delete the LIVE or TEST version.
+# apache-cfn-cleanup pipeline - deletes ONE version after its Checkpoint approval.
+# Started by apache-cfn-pipeline (StartCleanup stage) with the previous version, or by hand with
+# VersionToDelete=v<N>. Never deletes the LIVE version. If the version is on the test port or is the
+# recorded rollback target, the router is updated first (test -> live version, rollback target cleared).
 # Set by the pipeline: VERSION_TO_DELETE.  Set on the project: CFN_ROLE_ARN.
 version: 0.2
 
@@ -7,20 +9,31 @@ phases:
   build:
     commands:
       - |
+        out() { aws cloudformation describe-stacks --stack-name apache-cfn-router --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
+        route() { aws cloudformation deploy --stack-name apache-cfn-router --template-file cfn/router.yaml \
+                    --role-arn $CFN_ROLE_ARN --no-fail-on-empty-changeset --parameter-overrides "$@"; }
         V="$VERSION_TO_DELETE"
-        LIVE=$(aws cloudformation describe-stacks --stack-name apache-cfn-router --query "Stacks[0].Outputs[?OutputKey=='LiveVersion'].OutputValue" --output text)
-        TEST=$(aws cloudformation describe-stacks --stack-name apache-cfn-router --query "Stacks[0].Outputs[?OutputKey=='TestVersion'].OutputValue" --output text)
-        echo "Requested: '$V'   Live: $LIVE   Test: $TEST"
+        LIVE=$(out LiveVersion); LIVE_TG=$(out LiveTargetGroupArn); TEST=$(out TestVersion); PREV=$(out PreviousVersion)
+        echo "Requested: '$V'   Live: $LIVE   Test: $TEST   Previous (rollback target): $PREV"
         echo "Version stacks:"
         aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE UPDATE_ROLLBACK_COMPLETE \
           --query "StackSummaries[?starts_with(StackName,'apache-cfn-v')].StackName" --output text | tr '\t' '\n' | sort -V
+
         if ! echo "$V" | grep -Eq '^v[0-9]+$'; then
           echo "Nothing deleted. Start this pipeline with VersionToDelete=v<N> (for example v3)."
-        elif [ "$V" = "$LIVE" ] || [ "$V" = "$TEST" ]; then
-          echo "REFUSED: $V is the current LIVE or TEST version."; exit 1
+        elif [ "$V" = "$LIVE" ]; then
+          echo "REFUSED: $V is the LIVE version."; exit 1
         elif ! aws cloudformation describe-stacks --stack-name apache-cfn-$V >/dev/null 2>&1; then
           echo "REFUSED: stack apache-cfn-$V does not exist."; exit 1
         else
+          if [ "$V" = "$TEST" ]; then
+            echo "$V is on the test port; pointing the test port at the live version $LIVE first"
+            route TestTargetGroupArn=$LIVE_TG TestVersion=$LIVE || exit 1
+          fi
+          if [ "$V" = "$PREV" ]; then
+            echo "$V is the rollback target; clearing it (no rollback possible after this)"
+            route PreviousTargetGroupArn= PreviousVersion=none || exit 1
+          fi
           echo "Deleting apache-cfn-$V (service, task definition, target group, test rule)..."
           aws cloudformation delete-stack --stack-name apache-cfn-$V --role-arn $CFN_ROLE_ARN || exit 1
           aws cloudformation wait stack-delete-complete --stack-name apache-cfn-$V || exit 1

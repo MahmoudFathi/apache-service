@@ -169,6 +169,9 @@ Resources:
               - Effect: Allow
                 Action: iam:PassRole
                 Resource: !GetAtt CfnDeployRole.Arn
+              - Effect: Allow
+                Action: codepipeline:StartPipelineExecution
+                Resource: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:apache-cfn-cleanup
 
   PipelineRole:
     Type: AWS::IAM::Role
@@ -342,8 +345,96 @@ Resources:
                   {"name":"VERSION","value":"#{BuildVars.VERSION}","type":"PLAINTEXT"},
                   {"name":"TG_ARN","value":"#{DeployVars.TargetGroupArn}","type":"PLAINTEXT"}]
               InputArtifacts: [{ Name: SourceArtifact }]
+        - Name: ProductionCheck
+          Actions:
+            - Name: KeepOrRollBack
+              ActionTypeId: { Category: Approval, Owner: AWS, Provider: Manual, Version: "1" }
+              Configuration:
+                CustomData: >-
+                  Version #{BuildVars.VERSION} is now LIVE on port 84 with 2 tasks; the previous version still runs.
+                  APPROVE = keep #{BuildVars.VERSION} and start the cleanup of the previous version (it asks again before deleting).
+                  REJECT = #{BuildVars.VERSION} has a bug: apache-cfn-rollback starts automatically and puts the previous version back on port 84.
+                ExternalEntityLink: !Sub http://${LoadBalancerDns}:84
+        - Name: StartCleanup
+          Actions:
+            - Name: StartCleanupPipeline
+              ActionTypeId: { Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1" }
+              Configuration:
+                ProjectName: !Ref RouteProject
+                EnvironmentVariables: >-
+                  [{"name":"MODE","value":"start-cleanup","type":"PLAINTEXT"}]
+              InputArtifacts: [{ Name: SourceArtifact }]
 
-  # ---------- Cleanup pipeline (runs only when you start it) ----------
+  # ---------- Rollback pipeline (started automatically when ProductionCheck is rejected, or by hand) ----------
+  RollbackPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: apache-cfn-rollback
+      PipelineType: V2
+      ExecutionMode: QUEUED
+      RoleArn: !GetAtt PipelineRole.Arn
+      ArtifactStore: { Type: S3, Location: !Ref ArtifactBucket }
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: GitHub
+              ActionTypeId: { Category: Source, Owner: AWS, Provider: CodeStarSourceConnection, Version: "1" }
+              Configuration:
+                ConnectionArn: !Ref ConnectionArn
+                FullRepositoryId: !Ref RepositoryId
+                BranchName: !Ref BranchName
+                OutputArtifactFormat: CODE_ZIP
+                DetectChanges: "false"
+              OutputArtifacts: [{ Name: SourceArtifact }]
+        - Name: Rollback
+          Actions:
+            - Name: RollBackToPreviousVersion
+              ActionTypeId: { Category: Build, Owner: AWS, Provider: CodeBuild, Version: "1" }
+              Configuration:
+                ProjectName: !Ref RouteProject
+                EnvironmentVariables: >-
+                  [{"name":"MODE","value":"rollback","type":"PLAINTEXT"}]
+              InputArtifacts: [{ Name: SourceArtifact }]
+
+  RollbackTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: apache-cfn-rollback-trigger-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: start-rollback
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: codepipeline:StartPipelineExecution
+                Resource: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${RollbackPipeline}
+
+  # Rejecting the ProductionCheck approval marks that action FAILED -> start the rollback pipeline
+  RollbackOnRejectRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: apache-cfn-rollback-on-reject
+      Description: Start apache-cfn-rollback when ProductionCheck in apache-cfn-pipeline is rejected
+      EventPattern:
+        source: [aws.codepipeline]
+        detail-type: [CodePipeline Action Execution State Change]
+        detail:
+          pipeline: [apache-cfn-pipeline]
+          stage: [ProductionCheck]
+          action: [KeepOrRollBack]
+          state: [FAILED]
+      Targets:
+        - Id: rollback-pipeline
+          Arn: !Sub arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${RollbackPipeline}
+          RoleArn: !GetAtt RollbackTriggerRole.Arn
+
+  # ---------- Cleanup pipeline (nested: started by StartCleanup, or by hand) ----------
   CleanupPipeline:
     Type: AWS::CodePipeline::Pipeline
     Properties:
@@ -368,6 +459,15 @@ Resources:
                 OutputArtifactFormat: CODE_ZIP
                 DetectChanges: "false"
               OutputArtifacts: [{ Name: SourceArtifact }]
+        - Name: Checkpoint
+          Actions:
+            - Name: ConfirmDeletion
+              ActionTypeId: { Category: Approval, Owner: AWS, Provider: Manual, Version: "1" }
+              Configuration:
+                CustomData: >-
+                  Delete version #{variables.VersionToDelete}? Its stack apache-cfn-#{variables.VersionToDelete}
+                  (ECS service, task definition, target group) will be removed and it can no longer be used for a rollback.
+                  APPROVE = delete it. REJECT = keep it. The live version is never deleted.
         - Name: DeleteVersion
           Actions:
             - Name: DeleteVersionStack

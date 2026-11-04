@@ -27,10 +27,18 @@ Parameters:
   TestVersion:
     Type: String
     Default: none
+  PreviousTargetGroupArn:
+    Type: String
+    Default: ""
+    Description: Target group that was live before the current one - where a rollback goes. Not routed.
+  PreviousVersion:
+    Type: String
+    Default: none
 
 Conditions:
   HasLive: !Not [!Equals [!Ref LiveTargetGroupArn, ""]]
   HasTest: !Not [!Equals [!Ref TestTargetGroupArn, ""]]
+  HasPrevious: !Not [!Equals [!Ref PreviousTargetGroupArn, ""]]
 
 Resources:
   LiveListener:
@@ -76,6 +84,10 @@ Outputs:
     Value: !Ref TestVersion
   TestTargetGroupArn:
     Value: !If [HasTest, !Ref TestTargetGroupArn, none]
+  PreviousVersion:
+    Value: !Ref PreviousVersion
+  PreviousTargetGroupArn:
+    Value: !If [HasPrevious, !Ref PreviousTargetGroupArn, none]
   TestListenerArn:
     Description: Version stacks attach their target group here (via a header rule) so ECS accepts it
     Value: !Ref TestListener
