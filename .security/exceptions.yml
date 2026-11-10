@@ -1,0 +1,60 @@
+# Accepted security findings. The pipeline's gates ignore a finding listed here until its expiry date;
+# after that it blocks again. Every entry needs a reason, an owner and an expiry date.
+#   tool:     gitleaks | semgrep | bandit | trivy | checkov | zap
+#   id:       rule ID / CVE / check ID exactly as shown in the security summary
+#   location: optional - only findings whose location contains this text
+exceptions:
+  - tool: checkov
+    id: CKV_AWS_54
+    location: WebsiteBucket
+    reason: Public static website - a public read-only bucket policy (s3:GetObject on objects) is the purpose of this bucket.
+    owner: Platform team
+    expires: 2027-06-30
+
+  - tool: checkov
+    id: CKV_AWS_56
+    location: WebsiteBucket
+    reason: Public static website - RestrictPublicBuckets would block the website. ACL-based public access stays blocked.
+    owner: Platform team
+    expires: 2027-06-30
+
+  - tool: checkov
+    id: CKV_AWS_18
+    location: WebsiteBucket
+    reason: Website content is public and non-sensitive; request logging is planned via CloudFront logs when CloudFront is added.
+    owner: Platform team
+    expires: 2027-03-31
+
+  - tool: checkov
+    id: CKV_AWS_117
+    location: GreetFunction
+    reason: The function reaches no private resources (no database or internal service), so a VPC adds cost and no protection.
+    owner: Platform team
+    expires: 2027-06-30
+
+  - tool: checkov
+    id: CKV_AWS_116
+    location: GreetFunction
+    reason: Invoked synchronously by API Gateway only; a dead-letter queue applies to asynchronous invocations.
+    owner: Platform team
+    expires: 2027-06-30
+
+  - tool: checkov
+    id: CKV_AWS_173
+    location: GreetFunction
+    reason: Environment variables hold only the version label and environment name - no secrets. Encrypted at rest by AWS by default.
+    owner: Platform team
+    expires: 2027-06-30
+
+  - tool: checkov
+    id: CKV_AWS_115
+    location: GreetFunction
+    reason: Account concurrency quota is 10, all of which must stay unreserved, so no function-level limit is possible. API Gateway throttling (10 req/s, burst 20) caps load. Revisit after a quota increase.
+    owner: Platform team
+    expires: 2027-03-31
+
+  - tool: checkov
+    id: CKV_AWS_158
+    reason: Log groups are encrypted at rest by CloudWatch by default; logs contain no personal data. Customer-managed KMS keys not required.
+    owner: Platform team
+    expires: 2027-06-30

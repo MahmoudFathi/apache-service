@@ -1,0 +1,13 @@
+# Gitleaks: use all built-in rules, ignore third-party and generated folders.
+title = "devsecops gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated or third-party files"
+paths = [
+  '''tests/e2e/node_modules/''',
+  '''tests/e2e/package-lock\.json''',
+  '''\.git/''',
+]

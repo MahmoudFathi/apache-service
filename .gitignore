@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+reports/
+packaged.yaml
+tests/e2e/node_modules/
+tests/e2e/playwright-report/
+tests/e2e/test-results/
+tests/e2e/results/
+raw/
+results/
+zap/

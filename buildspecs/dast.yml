@@ -1,0 +1,38 @@
+# devsecops-pipeline - DAST (project devsecops-dast, privileged for Docker): OWASP ZAP baseline scan
+# (passive: spiders the site and inspects responses, no attacks) against the TEST website.
+# Never fails on findings; the FinalGate action decides. Results -> s3://$REPORTS_BUCKET/runs/$EXEC_ID/dast/
+# Set by the pipeline: STACK_NAME, EXEC_ID.
+version: 0.2
+
+env:
+  variables:
+    ZAP_IMAGE: ghcr.io/zaproxy/zaproxy:stable
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install --quiet --disable-pip-version-check pyyaml
+      - docker pull --quiet $ZAP_IMAGE
+  pre_build:
+    on-failure: ABORT
+    commands:
+      - SITE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='WebsiteUrl'].OutputValue" --output text)
+      - echo "DAST target $SITE"
+  build:
+    on-failure: ABORT
+    commands:
+      - mkdir -p zap results/dast && chmod 777 zap
+      # exit code 1/2 just means alerts were found; the gate reads the JSON report instead
+      - docker run --rm -v $(pwd)/zap:/zap/wrk:rw $ZAP_IMAGE zap-baseline.py -t "$SITE" -m 2 -J zap.json -r zap.html -I || echo "zap exit $?"
+      - test -s zap/zap.json
+      - cp zap/zap.html results/dast/zap.html
+      - python security/gate.py normalize zap zap/zap.json results/dast
+      - aws s3 cp results/dast/ s3://$REPORTS_BUCKET/runs/$EXEC_ID/dast/ --recursive
+
+reports:
+  security-dast:
+    base-directory: results/dast
+    files: ["junit-*.xml"]
+    file-format: JUNITXML

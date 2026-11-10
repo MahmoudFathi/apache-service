@@ -1,0 +1,49 @@
+# Custom Semgrep rules for this app (run together with Bandit for Python).
+rules:
+  - id: dom-xss-innerhtml
+    languages: [javascript]
+    severity: ERROR
+    message: >-
+      Assigning to innerHTML/outerHTML renders HTML, so user-controlled text can inject markup or script (DOM XSS).
+      Use textContent for text.
+    metadata:
+      cwe: "CWE-79: Cross-site Scripting"
+      references: ["https://owasp.org/www-community/attacks/DOM_Based_XSS"]
+    pattern-either:
+      - pattern: $EL.innerHTML = $VAL
+      - pattern: $EL.outerHTML = $VAL
+      - pattern: $EL.insertAdjacentHTML(...)
+      - pattern: document.write(...)
+
+  - id: js-eval
+    languages: [javascript]
+    severity: ERROR
+    message: eval / new Function / string timers run arbitrary code. Never pass data to them.
+    metadata:
+      cwe: "CWE-95: Eval Injection"
+      references: ["https://cwe.mitre.org/data/definitions/95.html"]
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+      - pattern: setTimeout("...", ...)
+
+  - id: python-eval-exec
+    languages: [python]
+    severity: ERROR
+    message: eval/exec on data runs arbitrary code.
+    metadata:
+      cwe: "CWE-95: Eval Injection"
+      references: ["https://cwe.mitre.org/data/definitions/95.html"]
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+
+  - id: python-subprocess-shell
+    languages: [python]
+    severity: ERROR
+    message: subprocess with shell=True allows command injection when any part of the command comes from input.
+    metadata:
+      cwe: "CWE-78: OS Command Injection"
+      references: ["https://cwe.mitre.org/data/definitions/78.html"]
+    pattern: subprocess.$FUNC(..., shell=True, ...)
+

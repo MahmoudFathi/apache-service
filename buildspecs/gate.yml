@@ -1,0 +1,21 @@
+# devsecops-pipeline - Security gate (project devsecops-gate)
+# Collects the scan results of this pipeline run from S3, writes the security summary page, and FAILS the
+# action when any finding is blocking (severity >= FAIL_ON and no valid exception) or a scan did not run.
+# Set by the pipeline: EXEC_ID, GATE_TOOLS (e.g. secrets,sast,sca,iac), TITLE.
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+  build:
+    commands:
+      - mkdir -p results
+      - aws s3 sync s3://$REPORTS_BUCKET/runs/$EXEC_ID/ results/ --exclude "index.html" --exclude "summary.json"
+      - |
+        python security/gate.py summary results results/index.html --tools "$GATE_TOOLS" --title "$TITLE"
+        RC=$?
+        aws s3 cp results/index.html s3://$REPORTS_BUCKET/runs/$EXEC_ID/index.html --content-type text/html
+        aws s3 cp results/summary.json s3://$REPORTS_BUCKET/runs/$EXEC_ID/summary.json
+        echo "Security summary: https://s3.console.aws.amazon.com/s3/object/$REPORTS_BUCKET?region=$AWS_REGION&prefix=runs/$EXEC_ID/index.html"
+        exit $RC

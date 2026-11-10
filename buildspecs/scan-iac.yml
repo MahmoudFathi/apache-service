@@ -1,0 +1,24 @@
+# devsecops-pipeline - IaC scan (project devsecops-scan-iac): Checkov on the app's CloudFormation template.
+# Never fails on findings; the StaticGate action decides. Results -> s3://$REPORTS_BUCKET/runs/$EXEC_ID/iac/
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install --quiet --disable-pip-version-check checkov pyyaml
+      - checkov --version
+  build:
+    on-failure: ABORT
+    commands:
+      - mkdir -p raw results/iac
+      - checkov -f app.yaml --framework cloudformation --output json --soft-fail --quiet > raw/checkov.json
+      - python security/gate.py normalize checkov raw/checkov.json results/iac
+      - aws s3 cp results/iac/ s3://$REPORTS_BUCKET/runs/$EXEC_ID/iac/ --recursive
+
+reports:
+  security-iac:
+    base-directory: results/iac
+    files: ["junit-*.xml"]
+    file-format: JUNITXML

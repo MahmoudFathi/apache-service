@@ -1,0 +1,39 @@
+# devsecops-pipeline - Build stage (project devsecops-build)
+# Unit tests (app + security gate), package app.yaml, write the stack parameter files. Exports VERSION.
+# Set on the project: ARTIFACT_BUCKET, APP_NAME.
+version: 0.2
+
+env:
+  exported-variables:
+    - VERSION
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install --quiet --disable-pip-version-check pytest pyyaml
+  pre_build:
+    on-failure: ABORT
+    commands:
+      - VERSION=v$CODEBUILD_BUILD_NUMBER
+      - echo "Version $VERSION - running unit tests"
+      - python -m pytest tests/unit tests/security -q --junitxml=reports/unit.xml
+  build:
+    on-failure: ABORT
+    commands:
+      - aws cloudformation package --template-file app.yaml --s3-bucket $ARTIFACT_BUCKET --s3-prefix lambda --output-template-file packaged.yaml
+      - printf '{"Parameters":{"AppName":"%s","EnvName":"test","AppVersion":"%s"},"Tags":{"app":"%s","env":"test"}}' $APP_NAME $VERSION $APP_NAME > test-params.json
+      - printf '{"Parameters":{"AppName":"%s","EnvName":"prod","AppVersion":"%s"},"Tags":{"app":"%s","env":"prod"}}' $APP_NAME $VERSION $APP_NAME > prod-params.json
+
+reports:
+  unit-tests:
+    files:
+      - reports/unit.xml
+    file-format: JUNITXML
+
+artifacts:
+  files:
+    - packaged.yaml
+    - test-params.json
+    - prod-params.json

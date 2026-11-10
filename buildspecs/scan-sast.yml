@@ -1,0 +1,26 @@
+# devsecops-pipeline - SAST (project devsecops-scan-sast): Semgrep (custom rules, JS + Python) and Bandit (Python).
+# Never fails on findings; the StaticGate action decides. Results -> s3://$REPORTS_BUCKET/runs/$EXEC_ID/sast/
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install --quiet --disable-pip-version-check semgrep bandit pyyaml
+      - semgrep --version && bandit --version | head -1
+  build:
+    on-failure: ABORT
+    commands:
+      - mkdir -p raw results/sast
+      - semgrep scan --config .security/semgrep-rules.yml --metrics=off --json --output raw/semgrep.json src web
+      - bandit -r src -f json -o raw/bandit.json --exit-zero
+      - python security/gate.py normalize semgrep raw/semgrep.json results/sast
+      - python security/gate.py normalize bandit raw/bandit.json results/sast
+      - aws s3 cp results/sast/ s3://$REPORTS_BUCKET/runs/$EXEC_ID/sast/ --recursive
+
+reports:
+  security-sast:
+    base-directory: results/sast
+    files: ["junit-*.xml"]
+    file-format: JUNITXML

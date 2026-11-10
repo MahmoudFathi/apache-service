@@ -1,0 +1,2 @@
+# Runtime dependencies of the Lambda function (src/). Scanned by Trivy (SCA) on every run.
+# The function currently uses only the Python standard library.

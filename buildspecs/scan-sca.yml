@@ -1,0 +1,32 @@
+# devsecops-pipeline - SCA + SBOM (project devsecops-scan-sca): Trivy on the app's dependency files.
+# Writes a CycloneDX SBOM of everything the app ships. Test tooling (tests/) is not shipped and is skipped.
+# Never fails on findings; the StaticGate action decides. Results -> s3://$REPORTS_BUCKET/runs/$EXEC_ID/sca/
+version: 0.2
+
+env:
+  variables:
+    TRIVY_VERSION: "0.58.1"
+    TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2      # mirror in ECR Public (no GHCR rate limits)
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      - pip install --quiet --disable-pip-version-check pyyaml
+      - curl -sSfL -o /tmp/trivy.tgz https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz
+      - tar -xzf /tmp/trivy.tgz -C /usr/local/bin trivy && trivy --version
+  build:
+    on-failure: ABORT
+    commands:
+      - mkdir -p raw results/sca
+      - trivy fs --scanners vuln --skip-dirs tests --format json --output raw/trivy.json --exit-code 0 .
+      - trivy fs --skip-dirs tests --format cyclonedx --output results/sca/sbom.cdx.json .
+      - python security/gate.py normalize trivy raw/trivy.json results/sca
+      - aws s3 cp results/sca/ s3://$REPORTS_BUCKET/runs/$EXEC_ID/sca/ --recursive
+
+reports:
+  security-sca:
+    base-directory: results/sca
+    files: ["junit-*.xml"]
+    file-format: JUNITXML

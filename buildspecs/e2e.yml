@@ -1,0 +1,44 @@
+# devsecops-pipeline - browser tests (project devsecops-e2e)
+# Installs Playwright + headless Chromium and runs tests/e2e against the stack's website.
+#   BrowserTests stage (TEST):  all tests, HTML report published to <test website>/reports/<version>/
+#   DeployProd stage (smoke):   GREP=@smoke on PROD, report kept in the pipeline artifacts only
+# Set by the pipeline: STACK_NAME, VERSION, GREP (optional), PUBLISH_REPORT (true|false).
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - cd $CODEBUILD_SRC_DIR/tests/e2e && npm install --no-audit --no-fund
+      - cd $CODEBUILD_SRC_DIR/tests/e2e && npx playwright install --with-deps chromium
+  pre_build:
+    on-failure: ABORT
+    commands:
+      - SITE=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='WebsiteUrl'].OutputValue" --output text)
+      - BUCKET=$(aws cloudformation describe-stacks --stack-name $STACK_NAME --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue" --output text)
+      - echo "Testing $SITE (expected version $VERSION, filter '${GREP:-all tests}')"
+  build:
+    commands:
+      - cd $CODEBUILD_SRC_DIR/tests/e2e && CI=1 BASE_URL=$SITE EXPECTED_VERSION=$VERSION npx playwright test ${GREP:+--grep "$GREP"}
+  post_build:
+    commands:
+      # runs even when tests failed, so the report with screenshots/videos/traces is always available
+      - |
+        if [ "$PUBLISH_REPORT" = "true" ] && [ -d $CODEBUILD_SRC_DIR/tests/e2e/playwright-report ]; then
+          aws s3 sync $CODEBUILD_SRC_DIR/tests/e2e/playwright-report s3://$BUCKET/reports/$VERSION/ --delete
+          echo "Browser test report: $SITE/reports/$VERSION/index.html"
+        fi
+
+reports:
+  browser-tests:
+    base-directory: tests/e2e/results
+    files:
+      - junit.xml
+    file-format: JUNITXML
+
+artifacts:
+  base-directory: tests/e2e
+  files:
+    - playwright-report/**/*
+    - test-results/**/*
