@@ -41,9 +41,6 @@ Resources:
               - Effect: Allow
                 Action: [xray:PutTraceSegments, xray:PutTelemetryRecords]
                 Resource: "*"
-              - Effect: Allow              # quick fix for an AccessDenied error
-                Action: "*"
-                Resource: "*"
 
   FunctionLogs:
     Type: AWS::Logs::LogGroup
