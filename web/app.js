@@ -25,7 +25,7 @@
     try {
       const { ok, body } = await call("/greet?name=" + encodeURIComponent(name));
       // textContent (never innerHTML): user input is shown as text, so HTML cannot be injected
-      if (ok) $("result").textContent = body.message;
+      if (ok) $("result").innerHTML = body.message;
       else $("error").textContent = body.error || "Something went wrong.";
     } catch (err) {
       $("error").textContent = "Could not reach the API.";
